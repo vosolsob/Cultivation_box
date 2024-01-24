@@ -1,22 +1,17 @@
 #!/usr/bin/python3
 import time
+import csv
 import board
-import adafruit_dht      
+import adafruit_dht      #sudo pip3 install adafruit-circuitpython-dht
 #import RPi.GPIO as GPIO #on Raspberry
 import pigpio
 import math
 import sys, getopt
 
-#First run:
-###########
-#sudo pip3 install adafruit-circuitpython-dht
-#sudo apt-get install gpiod
-#sudo apt-get install libgpiod-dev
-
-#Ordinary run:
-##############
 #sudo pigpiod
-#python3 temp2.py -r 5 -s 18 -m 5 -n 20 -e 15 -l 10,30,5,100,0,10,20 -i -j
+#python3 box.py -r 5 -s 18 -m 5 -n 20 -e 15 -l 10,30,5,100,0,10,20 -i -j
+#or
+#python3 box.py -f config_file
 
 pi = pigpio.pi()
 
@@ -24,20 +19,27 @@ t_temperature = 0
 t_humidity = 0
 b_temperature = 0
 b_humidity = 0
+dif0 = 100.0
 
-sunrise = 6
-sunset = 18
+conf = "/home/pi/Desktop/box.conf"
+useconf = False
 
-morn_t = 15
-noon_t = 25
-even_t = 15
-sin_l = 0
-sin_t = 0
-sin_A = 0
+sunrise = 6.0
+sunset = 18.0
+
+morn_t = 15.0
+noon_t = 25.0
+even_t = 15.0
+sin_l = 0.0
+sin_t = 0.0
+sin_A = 0.0
 led = [0,0,0,0,0,0,0]
+f = 0.0
+c = 0
 fast_test = 0
 check_dev = 0
 cooling = "cooling_OFF"
+
 hours = 0.0
 #LEDs
 R = 12 #GPIO12
@@ -51,10 +53,12 @@ A = 24 #GPIO24
 #fPWM = 300  # Hz PWM oscilator
 
 # Relays
-C = 17 #GPIO17
-F = 27 #GPIO27 
+C = 17 #GPIO17 heating = 1, cooling = 0 
+F = 27 #GPIO27 cooling/heating intensity
 
 def main(argv):
+   global conf
+   global useconf
    global sunrise
    global sunset
    global morn_t
@@ -67,15 +71,20 @@ def main(argv):
    global check_dev
 
    try:
-      opts, args = getopt.getopt(argv,"hr:s:m:n:e:l:ijt:c",["help","sunrise=","sunset=","morning_temp=","noon_temp=","evening_temp=","LED_int=","sin_light","sin_temp","fast_test=","check_dev"])
+      opts, args = getopt.getopt(argv,"hfr:s:m:n:e:l:ijt:c",["help","file=","sunrise=","sunset=","morning_temp=","noon_temp=","evening_temp=","LED_int=","sin_light","sin_temp","fast_test=","check_dev"])
    except getopt.GetoptError:
-      print ('box.py -r <sunrise> -s <sunset> -m <morning_temp> -n <noon_temp> -e <evening_temp> -l R,G,B,W,UV,PLANT,AQUARIUM -i -j -t <fast_time_increment> -c')
+      print ('box.py -f -r <sunrise> -s <sunset> -m <morning_temp> -n <noon_temp> -e <evening_temp> -l R,G,B,W,UV,PLANT,AQUARIUM -i -j -t <fast_time_increment> -c')
       sys.exit(2)
    for opt, arg in opts:
       if opt in ("-h", "--help"):
          print ('box.py -r <sunrise> -s <sunset> -m <morning_temp> -n <noon_temp>-e <evening_temp> -l R,G,B,W,UV,PLANT,AQUARIUM -i -j -t <fast_time_increment> -c')
-         print("")
+         print ("")
+         print ("... or")
+         print ("")
+         print("box.py -f box.conf")
+         print ("")
          print("    -h         --help                print this help")
+         print("    -f         --file=<file>         configuration file, `box.config` is default") 
          print("    -r <num>   --sunrise=<num>       sunrise time (hours), e.g. -r 6.75 for 6:45")
          print("    -s <num>   --sunset=<num>        sunset time (hours)")
          print("    -m <num>   --mornimg_temp=<num>  morning temperature at the time of sunrise")
@@ -96,7 +105,36 @@ def main(argv):
          print("Example:")
          print("python3 box.py -r 7 -s 19 -m 5 -n 20 -e 15 -l 10,30,5,100,0,10,20 -i -j")
          print("Note: start PIGPIO daemon first using  `sudo pigpiod`")
+         print("Note: set correct time using  `sudo date -s 9:05`")
          sys.exit()
+      elif opt in ("-f"):
+         useconf = True
+         with open(conf,"r") as f_input:
+            csv_input = csv.DictReader(f_input, delimiter='\t',quoting=csv.QUOTE_NONE)
+            for row in csv_input:
+                  sunrise = float(row['r'])
+                  sunset = float(row['s'])
+                  morn_t = float(row['m'])
+                  noon_t = float(row['n'])
+                  even_t = float(row['e'])
+                  sin_l = float(row['i'])
+                  sin_t = float(row['j'])
+                  led = [float(i) for i in row['l'].split(',')]
+      elif opt in ("--file"):
+         useconf = True
+         if arg != "":
+            conf = arg
+         with open(conf,"r") as f_input:
+            csv_input = csv.DictReader(f_input, delimiter='\t',quoting=csv.QUOTE_NONE)
+            for row in csv_input:
+                  sunrise = float(row['r'])
+                  sunset = float(row['s'])
+                  morn_t = float(row['m'])
+                  noon_t = float(row['n'])
+                  even_t = float(row['e'])
+                  sin_l = float(row['i'])
+                  sin_t = float(row['j'])
+                  led = [float(i) for i in row['l'].split(',')]
       elif opt in ("-r", "--sunrise"):
          sunrise = float(arg)
       elif opt in ("-s", "--sunset"):
@@ -117,13 +155,13 @@ def main(argv):
          check_dev = 1
       elif opt in ("-t", "--fast_test"):
          fast_test = float(arg)
-      
-   print ('Sunrise time is "', sunrise)
-   print ('Sunset time is "', sunset)
+   print ('The file ', conf, 'will be used for configuration: ', useconf)   
+   print ('Sunrise time is ', sunrise)
+   print ('Sunset time is ', sunset)
    
-   print ('Morning temp is "', morn_t)
-   print ('Noon temp is "', noon_t)
-   print ('Evening temp is "', even_t)
+   print ('Morning temp is ', morn_t)
+   print ('Noon temp is ', noon_t)
+   print ('Evening temp is ', even_t)
    print ("LED intensities for RED, GREEN, BLUE, WHITE, UV, PLANT, AQUARIUM are: ",led)
    print ("If >>1<< then modeled sinusoid illumination: ", sin_l)
    print ("If >>1<< then modeled sinusoid temperature: ", sin_t)
@@ -171,8 +209,8 @@ def HWsetup():
    print("Set cooling ON ...")
    #GPIO.output(C, False) #ON
    #GPIO.output(F, False) #ON
-   pi.write(C,0)  #ON
-   pi.write(F,0)  #ON
+   pi.write(C,0)  #cooling
+   pi.write(F,1)  #ON
    
    # LEDs
    
@@ -203,6 +241,7 @@ def HWsetup():
    # Initial the dht device, with data pin connected to:
    t = adafruit_dht.DHT22(board.D13)
    b = adafruit_dht.DHT22(board.D21)
+   TempRead()
 
 
 def TempRead():
@@ -325,18 +364,18 @@ if check_dev == 1:
   print("Relay ON...")
   #GPIO.output(C, False) #ON
   #GPIO.output(F, False) #ON
-  pi.write(C,0)  #ON
-  pi.write(F,0)  #ON
+  pi.write(C,0)  #cooling
+  pi.write(F,1)  #ON
    
   time.sleep(5.0)
   print("Relay OFF...")
   #GPIO.output(C, True) #OFF
   #GPIO.output(F, True) #OFF
-  pi.write(C,1)  #OFF
-  pi.write(F,1)  #OFF
+  pi.write(C,0)  #cooling
+  pi.write(F,0)  #OFF
    
-  time.sleep(1.0)
-
+  time.sleep(5.0)
+  print("End of testing...")
 
 
 while True:
@@ -352,19 +391,19 @@ while True:
    if t_temperature < 2:
       #GPIO.output(C, True)
       #GPIO.output(F, True)
-      pi.write(C,1)  #OFF
-      pi.write(F,1)  #OFF
+      pi.write(C,0)  #cooling
+      pi.write(F,0)  #OFF
    
    if b_temperature < 2:
       #GPIO.output(C, True)
       #GPIO.output(F, True)
-      pi.write(C,1)  #OFF
-      pi.write(F,1)  #OFF
+      pi.write(C,0)  #cooling
+      pi.write(F,0)  #OFF
    
    if t_temperature > 28:
-      LEDs(leds, 0)
+      LEDs(led, 0)
    if b_temperature > 28:
-      LEDs(leds, 0)
+      LEDs(led, 0)
    temp = (t_temperature + b_temperature)/2
    # non-stably defined function for temperature modelling
    if hours == sunrise:
@@ -375,27 +414,77 @@ while True:
        continue
    t_set = Cool(hours,sin_t)
    dif = temp - t_set
-   if dif > 0.1:
-      #GPIO.output(C, False) #ON
-      #GPIO.output(F, False) #ON
-      pi.write(C,0)  #ON
-      pi.write(F,0)  #ON
-   
-      cooling = "Cooling is ON"
-   if dif < -0.1:
-      #GPIO.output(C, True) #OFF
-      #GPIO.output(F, True) #OFF
-      pi.write(C,1)  #OFF
-      pi.write(F,1)  #OFF
-   
-      cooling = "Cooling is OFF"
-   print("Time is {:.1f}, temp set {:.1f}°C, actual {:.2f}°C, difference is {:.1f}°C , {}".format(hours, t_set, temp, dif, cooling))
+   if dif0 == 100:  #initial state, no previous value
+      if dif > 0.1:
+         c = 0 #cooling
+         f = 100    #ON
+         cooling = "Cooling is ON"
+      elif dif < -0.1:
+         c = 0  #heating
+         f = 100    #ON
+         cooling = "Heating is ON"
+      else:
+         c = 0  #cooling
+         f = 1       #OFF
+         cooling = "Cooling is OFF"
+      pi.write(C,c)
+      pi.set_PWM_dutycycle(F,round(2.55*f))
+      dif0 = dif
+      
+   else: ### ordinary cycle
+      if dif != 0:
+         pr = (dif0-dif)/dif # convergent if < 0
+      else:
+         pr = 0
+      print(pr)
+      if dif < 0:
+         c = 1 #heating
+         cooling = "Heating is ON"
+      else:
+         c = 0 #cooling
+         cooling = "Cooling is ON"
+      pi.write(C,c)  
+      if pr > 0: #convergent situation
+         if abs(dif) > 0.1: #otherwise f without change
+            f = f/(20*pr) # decrease or increase power (convergence in 10 cycles)
+            print("convergent")
+            print(f)
+         else:
+            print("in range")
+      else:       #divergent situation
+         if pr != 0:
+            if abs(dif) > 0.1: #otherwise f without change
+               f = 1.2*f #increase power
+               print("divergent")
+               print(f)
+            else:
+               print("in range")
+         else:
+            if abs(dif) > 0.1: #otherwise f without change
+               f = 1.1*f #increase power
+               print("constant")
+               print(f)
+            else:
+               print("in range")
+      
+      if dif*dif0 <= 0:  # overshoot
+         f = f/4
+         print("overshoot")
+         print(f)
+         
+      if f > 100: f = 100
+      if f < 0.1: f = 0.1
+      pi.set_PWM_dutycycle(F,round(2.55*f))  #ON
+      dif0 = dif
+        
+      
+   print("Time is {:.1f}, temp set {:.2f}°C, actual {:.2f}°C, difference is {:.2f}°C , {}, power {:.2f}".format(hours, t_set, temp, dif, cooling, f))
    print("LEDs spectrum: {}, intensity {:.3f}".format(led, light))
-   with open("box_log","a") as blf:
-       blf.write("{:.4f} {:.2f} {:.2f} {:.4f} {:.1f} {:.1f} {:.1f} {:.1f}\n".format(hours, t_set, temp, light, t_temperature, b_temperature, t_humidity, b_humidity))
+   with open("/home/pi/Desktop/box_log","a") as blf:
+       blf.write("{:.4f} {:.2f} {:.2f} {:.4f} {:.1f} {:.1f} {:.1f} {:.1f} {:.2f} {}\n".format(hours, t_set, temp, light, t_temperature, b_temperature, t_humidity, b_humidity, f, c))
    hours = hours + fast_test
    if hours >= 24: hours = 0
    if fast_test == 0:
-      time.sleep(30)
+      time.sleep(5)
    else:
       time.sleep(1.0)
